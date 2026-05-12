@@ -1,0 +1,14 @@
+{
+  "name": "weekday-commands",
+  "version": "0.1.0",
+  "description": "Obsidian plugin with commands for each day of the week.",
+  "main": "main.js",
+  "scripts": {
+    "build": "esbuild main.ts --bundle --outfile=main.js --format=cjs --platform=node --external:obsidian"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.4",
+    "obsidian": "^1.8.10",
+    "typescript": "^5.8.3"
+  }
+}
