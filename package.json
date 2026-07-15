@@ -1,6 +1,6 @@
 {
   "name": "weekday-commands",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Obsidian plugin with commands for each day of the week.",
   "main": "main.js",
   "scripts": {

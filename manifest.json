@@ -1,7 +1,7 @@
 {
   "id": "weekday-commands",
   "name": "Weekday Commands",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.5.0",
   "description": "Adds commands for each day of the week that open or create the next matching daily note.",
   "author": "Wren",
