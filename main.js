@@ -25,6 +25,7 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
+  integrateWithJournalView: false,
   dailyNotesFolder: ""
 };
 var obsidianMoment = import_obsidian.moment;
@@ -124,14 +125,14 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     const filePath = this.buildNotePath(date.format(dailyNoteSettings.format), dailyNoteSettings.folder);
     const existingFile = this.app.vault.getAbstractFileByPath(filePath);
     if (existingFile instanceof import_obsidian.TFile) {
-      await this.openFile(existingFile);
+      await this.openFile(existingFile, date);
       return;
     }
     if (dailyNoteSettings.useNativeCreation) {
       try {
         const createdFile2 = await this.createDailyNoteLikeCalendar(date, dailyNoteSettings);
         if (createdFile2 instanceof import_obsidian.TFile) {
-          await this.openFile(createdFile2);
+          await this.openFile(createdFile2, date);
           return;
         }
       } catch (error) {
@@ -142,7 +143,7 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     await this.app.vault.create(filePath, await this.renderDailyNoteTemplate(date, dailyNoteSettings));
     const createdFile = this.app.vault.getAbstractFileByPath(filePath);
     if (createdFile instanceof import_obsidian.TFile) {
-      await this.openFile(createdFile);
+      await this.openFile(createdFile, date);
       return;
     }
     new import_obsidian.Notice(`Could not open daily note for ${date.format("YYYY-MM-DD")}.`);
@@ -187,9 +188,36 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     }
     return this.app.vault.cachedRead(templateFile);
   }
-  async openFile(file) {
+  async openFile(file, date) {
+    if (this.settings.integrateWithJournalView) {
+      const targetDate = date ?? this.getDateForDailyNoteFile(file);
+      if (targetDate && await this.openInJournalView(targetDate)) {
+        return;
+      }
+    }
     const mode = this.app.vault.getConfig?.("defaultViewMode");
     await this.app.workspace.getUnpinnedLeaf().openFile(file, mode ? { mode } : void 0);
+  }
+  getDateForDailyNoteFile(file) {
+    const dailyNoteSettings = this.getEffectiveDailyNoteSettings();
+    const date = obsidianMoment(file.basename, dailyNoteSettings.format, true);
+    return date.isValid() ? date.startOf("day") : null;
+  }
+  async openInJournalView(date) {
+    const pluginManager = this.app.plugins;
+    const journalViewPlugin = pluginManager?.getPlugin?.("journal-view");
+    if (typeof journalViewPlugin?.activateView !== "function") {
+      new import_obsidian.Notice("Journal View is not enabled. Opening the daily note in a tab instead.");
+      return false;
+    }
+    try {
+      await journalViewPlugin.activateView(false, date, true);
+      return true;
+    } catch (error) {
+      console.error("Weekday Commands: failed to open Journal View", error);
+      new import_obsidian.Notice("Could not open Journal View. Opening the daily note in a tab instead.");
+      return false;
+    }
   }
   getNextWeekday(targetDay) {
     const today = obsidianMoment().startOf("day");
@@ -461,6 +489,12 @@ var WeekdayCommandsSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    new import_obsidian.Setting(containerEl).setName("Integrate with Journal View").setDesc("Send commands to Journal View instead of opening notes in tabs. Missing notes are still created.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.integrateWithJournalView).onChange(async (value) => {
+        this.plugin.settings.integrateWithJournalView = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian.Setting(containerEl).setName("Daily notes folder").setDesc("Optional folder override for this plugin. Leave blank to use the Daily Notes plugin folder.").addText(
       (text) => text.setPlaceholder("Daily").setValue(this.plugin.settings.dailyNotesFolder).onChange(async (value) => {
         this.plugin.settings.dailyNotesFolder = value.trim();

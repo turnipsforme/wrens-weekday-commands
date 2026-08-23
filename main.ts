@@ -14,6 +14,7 @@ import {
 } from "obsidian";
 
 interface WeekdayCommandsSettings {
+  integrateWithJournalView: boolean;
   dailyNotesFolder: string;
 }
 
@@ -37,7 +38,12 @@ interface NaturalLanguageDatesPlugin {
     | undefined;
 }
 
+interface JournalViewPlugin {
+  activateView: (forceNewTab?: boolean, date?: moment.Moment, focusAtEnd?: boolean) => Promise<void>;
+}
+
 const DEFAULT_SETTINGS: WeekdayCommandsSettings = {
+  integrateWithJournalView: false,
   dailyNotesFolder: "",
 };
 
@@ -168,7 +174,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
     const existingFile = this.app.vault.getAbstractFileByPath(filePath);
 
     if (existingFile instanceof TFile) {
-      await this.openFile(existingFile);
+      await this.openFile(existingFile, date);
       return;
     }
 
@@ -176,7 +182,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
       try {
         const createdFile = await this.createDailyNoteLikeCalendar(date, dailyNoteSettings);
         if (createdFile instanceof TFile) {
-          await this.openFile(createdFile);
+          await this.openFile(createdFile, date);
           return;
         }
       } catch (error) {
@@ -188,7 +194,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
     await this.app.vault.create(filePath, await this.renderDailyNoteTemplate(date, dailyNoteSettings));
     const createdFile = this.app.vault.getAbstractFileByPath(filePath);
     if (createdFile instanceof TFile) {
-      await this.openFile(createdFile);
+      await this.openFile(createdFile, date);
       return;
     }
 
@@ -256,9 +262,40 @@ export default class WeekdayCommandsPlugin extends Plugin {
     return this.app.vault.cachedRead(templateFile);
   }
 
-  private async openFile(file: TFile): Promise<void> {
+  private async openFile(file: TFile, date?: moment.Moment): Promise<void> {
+    if (this.settings.integrateWithJournalView) {
+      const targetDate = date ?? this.getDateForDailyNoteFile(file);
+      if (targetDate && (await this.openInJournalView(targetDate))) {
+        return;
+      }
+    }
+
     const mode = (this.app.vault as { getConfig?: (key: string) => string | undefined }).getConfig?.("defaultViewMode");
     await this.app.workspace.getUnpinnedLeaf().openFile(file, mode ? ({ mode } as never) : undefined);
+  }
+
+  private getDateForDailyNoteFile(file: TFile): moment.Moment | null {
+    const dailyNoteSettings = this.getEffectiveDailyNoteSettings();
+    const date = obsidianMoment(file.basename, dailyNoteSettings.format, true);
+    return date.isValid() ? date.startOf("day") : null;
+  }
+
+  private async openInJournalView(date: moment.Moment): Promise<boolean> {
+    const pluginManager = (this.app as App & { plugins?: { getPlugin?: (id: string) => unknown } }).plugins;
+    const journalViewPlugin = pluginManager?.getPlugin?.("journal-view") as JournalViewPlugin | undefined;
+    if (typeof journalViewPlugin?.activateView !== "function") {
+      new Notice("Journal View is not enabled. Opening the daily note in a tab instead.");
+      return false;
+    }
+
+    try {
+      await journalViewPlugin.activateView(false, date, true);
+      return true;
+    } catch (error) {
+      console.error("Weekday Commands: failed to open Journal View", error);
+      new Notice("Could not open Journal View. Opening the daily note in a tab instead.");
+      return false;
+    }
   }
 
   private getNextWeekday(targetDay: number) {
@@ -594,6 +631,16 @@ class WeekdayCommandsSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("Integrate with Journal View")
+      .setDesc("Send commands to Journal View instead of opening notes in tabs. Missing notes are still created.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.integrateWithJournalView).onChange(async (value) => {
+          this.plugin.settings.integrateWithJournalView = value;
+          await this.plugin.saveSettings();
+        })
+      );
 
     new Setting(containerEl)
       .setName("Daily notes folder")
