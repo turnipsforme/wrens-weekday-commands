@@ -44,6 +44,7 @@ const DEFAULT_SETTINGS: WeekdayCommandsSettings = {
 const obsidianMoment = moment as unknown as {
   (): moment.Moment;
   (input: string | Date): moment.Moment;
+  (input: string, format: string, strict: boolean): moment.Moment;
   (input: string, format: readonly string[], strict: boolean): moment.Moment;
 };
 
@@ -136,6 +137,29 @@ export default class WeekdayCommandsPlugin extends Plugin {
 
     await this.openDailyNote(date);
     return true;
+  }
+
+  async openRecentDailyNote(file: TFile): Promise<void> {
+    await this.openFile(file);
+  }
+
+  getRecentDailyNotes(limit = 3): TFile[] {
+    const dailyNoteSettings = this.getEffectiveDailyNoteSettings();
+    const excludedPaths = new Set(
+      [
+        obsidianMoment().startOf("day"),
+        obsidianMoment().startOf("day").subtract(1, "day"),
+        obsidianMoment().startOf("day").add(1, "day"),
+      ].map((date) => this.buildNotePath(date.format(dailyNoteSettings.format), dailyNoteSettings.folder))
+    );
+
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => file.parent?.path === dailyNoteSettings.folder)
+      .filter((file) => !excludedPaths.has(file.path))
+      .filter((file) => this.isDailyNoteFile(file, dailyNoteSettings.format))
+      .sort((first, second) => second.stat.mtime - first.stat.mtime)
+      .slice(0, limit);
   }
 
   private async openDailyNote(date: moment.Moment): Promise<void> {
@@ -249,12 +273,17 @@ export default class WeekdayCommandsPlugin extends Plugin {
       return null;
     }
 
+    const today = obsidianMoment().startOf("day");
+    const weekdayDate = this.parseWeekdayDate(query, today);
+    if (weekdayDate) {
+      return weekdayDate;
+    }
+
     const naturalLanguageDatesResult = this.parseWithNaturalLanguageDatesPlugin(input);
     if (naturalLanguageDatesResult) {
       return naturalLanguageDatesResult;
     }
 
-    const today = obsidianMoment().startOf("day");
     const simpleDates: Record<string, moment.Moment> = {
       today,
       "right now": today,
@@ -275,11 +304,6 @@ export default class WeekdayCommandsPlugin extends Plugin {
     const namedMonthDate = this.parseNamedMonthDate(query, today);
     if (namedMonthDate) {
       return namedMonthDate;
-    }
-
-    const weekdayDate = this.parseWeekdayDate(query, today);
-    if (weekdayDate) {
-      return weekdayDate;
     }
 
     const exactDate = obsidianMoment(input.trim(), DATE_INPUT_FORMATS, true);
@@ -400,7 +424,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
       return today.clone().add(delta, "days");
     }
 
-    return today.clone().add(delta, "days");
+    return today.clone().add(delta || 7, "days");
   }
 
   private parseAmount(amount: string): number {
@@ -465,6 +489,11 @@ export default class WeekdayCommandsPlugin extends Plugin {
     return normalizePath(folder ? `${folder}/${filename}.md` : `${filename}.md`);
   }
 
+  private isDailyNoteFile(file: TFile, format: string): boolean {
+    const date = obsidianMoment(file.basename, format, true);
+    return date.isValid() && date.format(format) === file.basename;
+  }
+
   private normalizeFolder(folder: string | undefined): string {
     return (folder ?? "").trim().replace(/^\/+|\/+$/g, "");
   }
@@ -492,10 +521,11 @@ class NaturalLanguageDateModal extends Modal {
   }
 
   onOpen(): void {
+    this.modalEl.addClass("weekday-commands-date-modal");
     this.titleEl.setText("Go to daily note");
     this.contentEl.empty();
 
-    const form = this.contentEl.createEl("form");
+    const form = this.contentEl.createEl("form", { cls: "weekday-commands-date-form" });
     const input = new TextComponent(form);
     input.setPlaceholder("tomorrow, next Friday, 2026-05-29");
     input.inputEl.ariaLabel = "Date";
@@ -516,6 +546,31 @@ class NaturalLanguageDateModal extends Modal {
       }
     });
 
+    const recentNotes = this.plugin.getRecentDailyNotes();
+    if (recentNotes.length > 0) {
+      const suggestions = this.contentEl.createDiv({ cls: "weekday-commands-recent-notes" });
+      suggestions.createDiv({
+        text: "Recently edited",
+        cls: "weekday-commands-recent-notes-label",
+      });
+      const buttons = suggestions.createDiv({ cls: "weekday-commands-recent-notes-buttons" });
+
+      for (const file of recentNotes) {
+        const button = buttons.createEl("button", { text: file.basename });
+        button.type = "button";
+        button.title = file.path;
+        button.addEventListener("click", async () => {
+          if (this.isSubmitting) {
+            return;
+          }
+
+          this.isSubmitting = true;
+          await this.plugin.openRecentDailyNote(file);
+          this.close();
+        });
+      }
+    }
+
     window.setTimeout(() => {
       input.inputEl.focus();
       input.inputEl.select();
@@ -523,6 +578,7 @@ class NaturalLanguageDateModal extends Modal {
   }
 
   onClose(): void {
+    this.modalEl.removeClass("weekday-commands-date-modal");
     this.contentEl.empty();
   }
 }

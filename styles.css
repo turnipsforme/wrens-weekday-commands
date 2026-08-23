@@ -1,0 +1,46 @@
+.weekday-commands-date-modal {
+  width: min(360px, calc(100vw - 32px));
+}
+
+.weekday-commands-date-modal .modal-title {
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.weekday-commands-date-modal .modal-content {
+  padding: 20px;
+}
+
+.weekday-commands-date-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.weekday-commands-date-form input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.weekday-commands-recent-notes {
+  margin-top: 18px;
+}
+
+.weekday-commands-recent-notes-label {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+.weekday-commands-recent-notes-buttons {
+  display: grid;
+  gap: 6px;
+}
+
+.weekday-commands-recent-notes-buttons button {
+  overflow: hidden;
+  width: 100%;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

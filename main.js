@@ -105,6 +105,20 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     await this.openDailyNote(date);
     return true;
   }
+  async openRecentDailyNote(file) {
+    await this.openFile(file);
+  }
+  getRecentDailyNotes(limit = 3) {
+    const dailyNoteSettings = this.getEffectiveDailyNoteSettings();
+    const excludedPaths = new Set(
+      [
+        obsidianMoment().startOf("day"),
+        obsidianMoment().startOf("day").subtract(1, "day"),
+        obsidianMoment().startOf("day").add(1, "day")
+      ].map((date) => this.buildNotePath(date.format(dailyNoteSettings.format), dailyNoteSettings.folder))
+    );
+    return this.app.vault.getMarkdownFiles().filter((file) => file.parent?.path === dailyNoteSettings.folder).filter((file) => !excludedPaths.has(file.path)).filter((file) => this.isDailyNoteFile(file, dailyNoteSettings.format)).sort((first, second) => second.stat.mtime - first.stat.mtime).slice(0, limit);
+  }
   async openDailyNote(date) {
     const dailyNoteSettings = this.getEffectiveDailyNoteSettings();
     const filePath = this.buildNotePath(date.format(dailyNoteSettings.format), dailyNoteSettings.folder);
@@ -187,11 +201,15 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     if (!query) {
       return null;
     }
+    const today = obsidianMoment().startOf("day");
+    const weekdayDate = this.parseWeekdayDate(query, today);
+    if (weekdayDate) {
+      return weekdayDate;
+    }
     const naturalLanguageDatesResult = this.parseWithNaturalLanguageDatesPlugin(input);
     if (naturalLanguageDatesResult) {
       return naturalLanguageDatesResult;
     }
-    const today = obsidianMoment().startOf("day");
     const simpleDates = {
       today,
       "right now": today,
@@ -209,10 +227,6 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     const namedMonthDate = this.parseNamedMonthDate(query, today);
     if (namedMonthDate) {
       return namedMonthDate;
-    }
-    const weekdayDate = this.parseWeekdayDate(query, today);
-    if (weekdayDate) {
-      return weekdayDate;
     }
     const exactDate = obsidianMoment(input.trim(), DATE_INPUT_FORMATS, true);
     if (exactDate.isValid()) {
@@ -314,7 +328,7 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
     if (modifier === "this") {
       return today.clone().add(delta, "days");
     }
-    return today.clone().add(delta, "days");
+    return today.clone().add(delta || 7, "days");
   }
   parseAmount(amount) {
     return amount === "a" || amount === "an" ? 1 : parseInt(amount, 10);
@@ -360,6 +374,10 @@ var WeekdayCommandsPlugin = class extends import_obsidian.Plugin {
   buildNotePath(filename, folder) {
     return (0, import_obsidian.normalizePath)(folder ? `${folder}/${filename}.md` : `${filename}.md`);
   }
+  isDailyNoteFile(file, format) {
+    const date = obsidianMoment(file.basename, format, true);
+    return date.isValid() && date.format(format) === file.basename;
+  }
   normalizeFolder(folder) {
     return (folder ?? "").trim().replace(/^\/+|\/+$/g, "");
   }
@@ -382,9 +400,10 @@ var NaturalLanguageDateModal = class extends import_obsidian.Modal {
     this.isSubmitting = false;
   }
   onOpen() {
+    this.modalEl.addClass("weekday-commands-date-modal");
     this.titleEl.setText("Go to daily note");
     this.contentEl.empty();
-    const form = this.contentEl.createEl("form");
+    const form = this.contentEl.createEl("form", { cls: "weekday-commands-date-form" });
     const input = new import_obsidian.TextComponent(form);
     input.setPlaceholder("tomorrow, next Friday, 2026-05-29");
     input.inputEl.ariaLabel = "Date";
@@ -402,12 +421,35 @@ var NaturalLanguageDateModal = class extends import_obsidian.Modal {
         input.inputEl.select();
       }
     });
+    const recentNotes = this.plugin.getRecentDailyNotes();
+    if (recentNotes.length > 0) {
+      const suggestions = this.contentEl.createDiv({ cls: "weekday-commands-recent-notes" });
+      suggestions.createDiv({
+        text: "Recently edited",
+        cls: "weekday-commands-recent-notes-label"
+      });
+      const buttons = suggestions.createDiv({ cls: "weekday-commands-recent-notes-buttons" });
+      for (const file of recentNotes) {
+        const button = buttons.createEl("button", { text: file.basename });
+        button.type = "button";
+        button.title = file.path;
+        button.addEventListener("click", async () => {
+          if (this.isSubmitting) {
+            return;
+          }
+          this.isSubmitting = true;
+          await this.plugin.openRecentDailyNote(file);
+          this.close();
+        });
+      }
+    }
     window.setTimeout(() => {
       input.inputEl.focus();
       input.inputEl.select();
     });
   }
   onClose() {
+    this.modalEl.removeClass("weekday-commands-date-modal");
     this.contentEl.empty();
   }
 };
