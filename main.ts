@@ -11,6 +11,7 @@ import {
   TFolder,
   TextComponent,
   moment,
+  type SettingDefinitionItem,
 } from "obsidian";
 
 interface WeekdayCommandsSettings {
@@ -46,6 +47,22 @@ const DEFAULT_SETTINGS: WeekdayCommandsSettings = {
   integrateWithJournalView: false,
   dailyNotesFolder: "",
 };
+
+function parseSettings(value: unknown): WeekdayCommandsSettings {
+  if (!value || typeof value !== "object") {
+    return { ...DEFAULT_SETTINGS };
+  }
+
+  const stored = value as Record<string, unknown>;
+  return {
+    integrateWithJournalView: typeof stored.integrateWithJournalView === "boolean"
+      ? stored.integrateWithJournalView
+      : DEFAULT_SETTINGS.integrateWithJournalView,
+    dailyNotesFolder: typeof stored.dailyNotesFolder === "string"
+      ? stored.dailyNotesFolder
+      : DEFAULT_SETTINGS.dailyNotesFolder,
+  };
+}
 
 const obsidianMoment = moment as unknown as {
   (): moment.Moment;
@@ -111,11 +128,12 @@ export default class WeekdayCommandsPlugin extends Plugin {
     this.addSettingTab(new WeekdayCommandsSettingTab(this.app, this));
   }
 
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  async loadSettings(): Promise<void> {
+    const stored: unknown = await this.loadData();
+    this.settings = parseSettings(stored);
   }
 
-  async saveSettings() {
+  async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
   }
 
@@ -224,7 +242,14 @@ export default class WeekdayCommandsPlugin extends Plugin {
       .replace(/{{\s*title\s*}}/gi, filename)
       .replace(
         /{{\s*(date|time)\s*(([+-]\d+)([yqmwdhs]))?\s*(:.+?)?}}/gi,
-        (_match, _timeOrDate, calc, timeDelta, unit, momentFormat) => {
+        (
+          _match: string,
+          _timeOrDate: string,
+          calc: string | undefined,
+          timeDelta: string | undefined,
+          unit: string | undefined,
+          momentFormat: string | undefined,
+        ) => {
           const now = obsidianMoment();
           const currentDate = date.clone().set({
             hour: now.get("hour"),
@@ -232,7 +257,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
             second: now.get("second"),
           });
 
-          if (calc) {
+          if (calc && timeDelta && unit) {
             currentDate.add(parseInt(timeDelta, 10), unit as moment.unitOfTime.DurationConstructor);
           }
 
@@ -271,7 +296,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
     }
 
     const mode = (this.app.vault as { getConfig?: (key: string) => string | undefined }).getConfig?.("defaultViewMode");
-    await this.app.workspace.getUnpinnedLeaf().openFile(file, mode ? ({ mode } as never) : undefined);
+    await this.app.workspace.getLeaf(false).openFile(file, mode ? ({ mode } as never) : undefined);
   }
 
   private getDateForDailyNoteFile(file: TFile): moment.Moment | null {
@@ -284,7 +309,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
     const pluginManager = (this.app as App & { plugins?: { getPlugin?: (id: string) => unknown } }).plugins;
     const journalViewPlugin = pluginManager?.getPlugin?.("journal-view") as JournalViewPlugin | undefined;
     if (typeof journalViewPlugin?.activateView !== "function") {
-      new Notice("Journal View is not enabled. Opening the daily note in a tab instead.");
+      new Notice("Journal view is not enabled. Opening the daily note in a tab instead.");
       return false;
     }
 
@@ -293,7 +318,7 @@ export default class WeekdayCommandsPlugin extends Plugin {
       return true;
     } catch (error) {
       console.error("Weekday Commands: failed to open Journal View", error);
-      new Notice("Could not open Journal View. Opening the daily note in a tab instead.");
+      new Notice("Could not open journal view. Opening the daily note in a tab instead.");
       return false;
     }
   }
@@ -564,23 +589,12 @@ class NaturalLanguageDateModal extends Modal {
 
     const form = this.contentEl.createEl("form", { cls: "weekday-commands-date-form" });
     const input = new TextComponent(form);
-    input.setPlaceholder("tomorrow, next Friday, 2026-05-29");
+    input.setPlaceholder("Tomorrow, next friday, 2026-05-29");
     input.inputEl.ariaLabel = "Date";
 
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (this.isSubmitting) {
-        return;
-      }
-
-      this.isSubmitting = true;
-      const didOpenNote = await this.plugin.openDailyNoteFromInput(input.getValue());
-      if (didOpenNote) {
-        this.close();
-      } else {
-        this.isSubmitting = false;
-        input.inputEl.select();
-      }
+      void this.submitDate(input);
     });
 
     const recentNotes = this.plugin.getRecentDailyNotes();
@@ -596,14 +610,8 @@ class NaturalLanguageDateModal extends Modal {
         const button = buttons.createEl("button", { text: file.basename });
         button.type = "button";
         button.title = file.path;
-        button.addEventListener("click", async () => {
-          if (this.isSubmitting) {
-            return;
-          }
-
-          this.isSubmitting = true;
-          await this.plugin.openRecentDailyNote(file);
-          this.close();
+        button.addEventListener("click", () => {
+          void this.openRecentNote(file);
         });
       }
     }
@@ -618,6 +626,27 @@ class NaturalLanguageDateModal extends Modal {
     this.modalEl.removeClass("weekday-commands-date-modal");
     this.contentEl.empty();
   }
+
+  private async submitDate(input: TextComponent): Promise<void> {
+    if (this.isSubmitting) return;
+
+    this.isSubmitting = true;
+    const didOpenNote = await this.plugin.openDailyNoteFromInput(input.getValue());
+    if (didOpenNote) {
+      this.close();
+    } else {
+      this.isSubmitting = false;
+      input.inputEl.select();
+    }
+  }
+
+  private async openRecentNote(file: TFile): Promise<void> {
+    if (this.isSubmitting) return;
+
+    this.isSubmitting = true;
+    await this.plugin.openRecentDailyNote(file);
+    this.close();
+  }
 }
 
 class WeekdayCommandsSettingTab extends PluginSettingTab {
@@ -628,31 +657,51 @@ class WeekdayCommandsSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: "Integrate with journal view",
+        desc: "Send commands to journal view instead of opening notes in tabs. Missing notes are still created.",
+        render: (setting) => this.configureJournalViewSetting(setting),
+      },
+      {
+        name: "Daily notes folder",
+        desc: "Optional folder override for this plugin. Leave blank to use the daily notes plugin folder.",
+        render: (setting) => this.configureDailyNotesFolderSetting(setting),
+      },
+    ];
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl)
-      .setName("Integrate with Journal View")
-      .setDesc("Send commands to Journal View instead of opening notes in tabs. Missing notes are still created.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.integrateWithJournalView).onChange(async (value) => {
+    this.configureJournalViewSetting(new Setting(containerEl));
+    this.configureDailyNotesFolderSetting(new Setting(containerEl));
+  }
+
+  private configureJournalViewSetting(setting: Setting): void {
+    setting
+      .setName("Integrate with journal view")
+      .setDesc("Send commands to journal view instead of opening notes in tabs. Missing notes are still created.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.integrateWithJournalView)
+        .onChange(async (value) => {
           this.plugin.settings.integrateWithJournalView = value;
           await this.plugin.saveSettings();
-        })
-      );
+        }));
+  }
 
-    new Setting(containerEl)
+  private configureDailyNotesFolderSetting(setting: Setting): void {
+    setting
       .setName("Daily notes folder")
-      .setDesc("Optional folder override for this plugin. Leave blank to use the Daily Notes plugin folder.")
-      .addText((text) =>
-        text
-          .setPlaceholder("Daily")
-          .setValue(this.plugin.settings.dailyNotesFolder)
-          .onChange(async (value) => {
-            this.plugin.settings.dailyNotesFolder = value.trim();
-            await this.plugin.saveSettings();
-          })
-      );
+      .setDesc("Optional folder override for this plugin. Leave blank to use the daily notes plugin folder.")
+      .addText((text) => text
+        .setPlaceholder("Daily")
+        .setValue(this.plugin.settings.dailyNotesFolder)
+        .onChange(async (value) => {
+          this.plugin.settings.dailyNotesFolder = value.trim();
+          await this.plugin.saveSettings();
+        }));
   }
 }
